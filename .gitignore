@@ -1,0 +1,15 @@
+# 敏感数据——绝不入库
+secrets/
+data/
+logs/
+workspace/
+.env
+*.env
+*.pem
+*.key
+*.tar.gz
+
+# 运行时产物
+__pycache__/
+*.pyc
+.DS_Store

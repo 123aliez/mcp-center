@@ -1,0 +1,82 @@
+name: mcp-gateway
+
+services:
+  mcp-admin:
+    build: ./mcp-admin
+    image: mcp-admin:v1
+    container_name: mcp-admin
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8330:8330"
+    environment:
+      - ADMIN_DATA_DIR=/app/data
+      - ADMIN_PEPPER_FILE=/app/secrets/token_hmac_pepper
+    volumes:
+      # 管理端挂载整个 data/（读写）：负责写各 MCP 的 config.json 与自身 admin/ 目录
+      - ./data:/app/data
+      - ./secrets:/app/secrets:ro
+    networks:
+      - net-admin
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  groksearch:
+    build: ./groksearch
+    image: mcp-groksearch:v1
+    container_name: mcp-groksearch
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8321:8321"
+    environment:
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_PORT=8321
+      - GROK_CONFIG_DIR=/app/data
+      - GROK_LOG_DIR=/app/logs
+    # 上游密钥不进 env：由 mcp-admin 写 data/grok/config.json（env_file 仅留非敏感项时也无需继承）
+    volumes:
+      - ./data/grok:/app/data
+      - ./logs/grok:/app/logs
+    networks:
+      - net-grok
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  codexmcp:
+    build: ./codexmcp
+    image: mcp-codexmcp:v1
+    container_name: mcp-codexmcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8322:8322"
+    environment:
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_PORT=8322
+      - CODEX_CD_ALLOWLIST=/workspace
+      - CODEX_MAX_CONCURRENCY=2
+      - MCP_ALLOWED_HOSTS=mcp.example.com
+    volumes:
+      - ./workspace:/workspace
+      # Codex 凭据/配置持久化（deploy 后 docker exec codex login；recreate 不丢）
+      - ./data/codex/home:/home/node
+    networks:
+      - net-codex
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+
+
+# 审查修复#2：三容器各自独立网络，互不可达（消除 /codex 横向访问 grok/admin 绕过 ACL 的路径）
+# 对外唯一通道 = 各自 127.0.0.1 端口映射 ← 宿主机 Nginx
+networks:
+  net-admin:
+    name: mcp-net-admin
+    driver: bridge
+  net-grok:
+    name: mcp-net-grok
+    driver: bridge
+  net-codex:
+    name: mcp-net-codex
+    driver: bridge
