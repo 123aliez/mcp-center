@@ -116,19 +116,81 @@ location = /_mcp_verify {
 
 ## 客户端接入
 
-任何支持 MCP streamable HTTP 的客户端（Claude Code / Codex CLI / Cherry Studio / Gemini CLI…）：
+接入前先在管理界面（`/admin` → 新建 Token）生成 Token，勾选该客户端需要的路径权限。以下按客户端逐条给出配置。
+
+### Claude Code（每条 MCP 一个命令）
 
 ```bash
-# Claude Code
+# 搜索（mcp-grok）
 claude mcp add --transport http mcp-grok "https://<域名>/grok/mcp" \
-  --header "Authorization: Bearer <token>"
+  --header "Authorization: Bearer <token>" --scope user
 
-# Codex CLI（Token 走环境变量）
-codex mcp add mcp-codex --url "https://<域名>/codex/mcp" \
-  --bearer-token-env-var MCP_TOKEN
+# Codex 协作（mcp-codex）
+claude mcp add --transport http mcp-codex "https://<域名>/codex/mcp" \
+  --header "Authorization: Bearer <token>" --scope user
+
+# 验证：两条都应显示 ✔ Connected
+claude mcp list
 ```
 
-Token 格式 `mcp_v2_<id>_<secret>`，在管理界面按需勾选路径权限（如只给 `/grok`）。建议一机一 Token。
+### Codex CLI（Token 走环境变量，避免明文进配置文件）
+
+```bash
+echo 'export MCP_TOKEN=<token>' >> ~/.bashrc && source ~/.bashrc
+codex mcp add mcp-grok --url "https://<域名>/grok/mcp" --bearer-token-env-var MCP_TOKEN
+codex mcp add mcp-codex --url "https://<域名>/codex/mcp" --bearer-token-env-var MCP_TOKEN
+codex mcp list   # 验证
+```
+
+### Hermes Agent（`~/.hermes/config.yaml` 的 `mcp_servers` 段）
+
+每个 MCP 一个条目；**有 `url` 字段即 HTTP 型**（stdio 型才写 `command`）：
+
+```yaml
+mcp_servers:
+  mcp-grok:
+    url: "https://<域名>/grok/mcp"
+    headers:
+      Authorization: "Bearer <token>"
+    timeout: 180
+  mcp-codex:
+    url: "https://<域名>/codex/mcp"
+    headers:
+      Authorization: "Bearer <token>"
+    timeout: 300
+```
+
+改完重启生效：`systemctl --user restart hermes-gateway`（Docker 部署则重启对应容器）。
+迁移提示：原来 stdio 型条目（`command: uvx ...` 形态）直接换成上面的 url + headers 写法即可，上游 API Key 不再写在 Hermes 配置里，集中到管理界面维护。
+
+### Gemini CLI（`~/.gemini/settings.json`）
+
+```json
+{ "mcpServers": {
+    "mcp-grok": {
+      "httpUrl": "https://<域名>/grok/mcp",
+      "headers": { "Authorization": "Bearer <token>" } } } }
+```
+
+### Cursor / Cherry Studio / ChatBox 等 GUI 客户端
+
+设置 → MCP → 添加服务器 → 类型选 **Streamable HTTP** → URL 填端点地址，请求头加 `Authorization: Bearer <token>`。
+
+### Python 代码集成（官方 SDK）
+
+```python
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+headers = {"Authorization": "Bearer <token>"}
+
+async with streamablehttp_client("https://<域名>/grok/mcp", headers=headers) as (r, w, _):
+    async with ClientSession(r, w) as s:
+        await s.initialize()
+        result = await s.call_tool("web_search", {"query": "..."})
+```
+
+Token 格式 `mcp_v2_<id>_<secret>`，仅创建时展示一次。建议一机一 Token；吊销即时生效。
 
 ## 新增一个 MCP
 
