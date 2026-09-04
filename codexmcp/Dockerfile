@@ -1,4 +1,5 @@
-# CodexMCP：fork 123aliez/codexmcp @ http 分支 + Codex CLI（Node 22）
+# CodexMCP：fork 123aliez/codexmcp @ remote-review 分支 + Codex CLI（Node 22）
+# 原地升级版：同一容器同一端口叠加 /v1/uploads 上传接口与审查三工具（不新增容器）
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,23 +9,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Codex CLI（全局安装，版本钉住便于回溯；升级时改此行并打新镜像 tag）
 RUN npm install -g @openai/codex@0.153.0
 
-# uv + codexmcp（钉 SHA：aeae8d9 = http v7（provider 降级 + global 修复））
+# uv + codexmcp（钉分支；升级时改 SHA 并打新镜像 tag）
 # venv 装到全局可读路径 /opt/venv（uv 托管的 Python 3.12 也放 /opt，避免 /root 下运行期不可见）
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+ARG CODEXMCP_REF
+ENV CODEXMCP_REF=${CODEXMCP_REF:-remote-review}
 RUN uv venv --python 3.12 /opt/venv \
     && VIRTUAL_ENV=/opt/venv uv pip install --no-cache \
-        "git+https://github.com/123aliez/codexmcp@aeae8d9" \
+        "git+https://github.com/123aliez/codexmcp@${CODEXMCP_REF}" \
+        python-multipart \
     && chmod -R a+rX /opt/venv /opt/uv-python
 ENV PATH="/opt/venv/bin:${PATH}"
 
 # node 镜像内置 uid 1000（node 用户）：直接复用为运行用户，HOME 固定，
 # .codex 凭据/配置持久化由 compose 挂载卷实现
-RUN mkdir -p /app/data /workspace /home/node/.codex \
-    && chown -R node:node /app/data /workspace /home/node/.codex
+# /var/lib/codexmcp：uploads(staging/ready) + reviews + state（临时快照，TTL 自动清理）
+RUN mkdir -p /app/data /workspace /home/node/.codex /var/lib/codexmcp \
+    && chown -R node:node /app/data /workspace /home/node/.codex /var/lib/codexmcp
 ENV HOME=/home/node \
-    CODEX_CD_ALLOWLIST=/workspace \
-    CODEX_MAX_CONCURRENCY=2
+    CODEX_CD_ALLOWLIST=/workspace:/var/lib/codexmcp/reviews \
+    CODEX_MAX_CONCURRENCY=2 \
+    CODEXMCP_UPLOAD_ROOT=/var/lib/codexmcp/uploads \
+    CODEXMCP_REVIEW_ROOT=/var/lib/codexmcp/reviews \
+    CODEXMCP_STATE_DB=/var/lib/codexmcp/state/codexmcp.sqlite3
 
 USER node
 WORKDIR /workspace

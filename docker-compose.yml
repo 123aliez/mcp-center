@@ -53,13 +53,31 @@ services:
     environment:
       - MCP_HTTP_HOST=0.0.0.0
       - MCP_HTTP_PORT=8322
-      - CODEX_CD_ALLOWLIST=/workspace
+      - CODEX_CD_ALLOWLIST=/workspace:/var/lib/codexmcp/reviews
       - CODEX_MAX_CONCURRENCY=2
-      - MCP_ALLOWED_HOSTS=mcp.example.com
+      - MCP_ALLOWED_HOSTS=mcp.hybaliez.xyz
+      # 远程审查（方案 §20 中央配置）
+      - CODEXMCP_UPLOAD_ROOT=/var/lib/codexmcp/uploads
+      - CODEXMCP_REVIEW_ROOT=/var/lib/codexmcp/reviews
+      - CODEXMCP_STATE_DB=/var/lib/codexmcp/state/codexmcp.sqlite3
+      - CODEXMCP_MAX_UPLOAD_BYTES=314572800
+      - CODEXMCP_MAX_UNPACKED_BYTES=2147483648
+      - CODEXMCP_MAX_FILE_COUNT=100000
+      - CODEXMCP_MAX_SINGLE_FILE_BYTES=20971520
+      - CODEXMCP_MAX_COMPRESSION_RATIO=100
+      - CODEXMCP_UPLOAD_TTL_SECONDS=1800
+      - CODEXMCP_REVIEW_IDLE_TTL_SECONDS=3600
+      - CODEXMCP_REVIEW_HARD_TTL_SECONDS=7200
+      - CODEXMCP_CLEANUP_INTERVAL_SECONDS=300
+      - CODEXMCP_GLOBAL_CONCURRENCY=2
+      - CODEXMCP_PER_CLIENT_CONCURRENCY=1
+      - CODEXMCP_CODEX_TIMEOUT_SECONDS=1800
     volumes:
       - ./workspace:/workspace
       # Codex 凭据/配置持久化（deploy 后 docker exec codex login；recreate 不丢）
       - ./data/codex/home:/home/node
+      # 远程审查：上传暂存/审查 workspace/状态库（TTL 自动清理，备份时排除 reviews/ 内容）
+      - ./data/codex/store:/var/lib/codexmcp
     networks:
       - net-codex
     logging:
@@ -97,7 +115,7 @@ services:
       - MCP_HTTP_HOST=0.0.0.0
       - MCP_HTTP_PORT=8324
       - ZOTERO_CONFIG_FILE=/app/data/config.json
-      - MCP_ALLOWED_HOSTS=mcp.example.com
+      - MCP_ALLOWED_HOSTS=mcp.hybaliez.xyz
     # 审查修复#5：只读挂载（同 amap）
     volumes:
       - ./data/zotero:/app/data:ro

@@ -36,6 +36,8 @@
 |------|------|------|
 | `/grok/mcp` | GrokSearch fork（web_search / web_fetch / plan_* 等 13 工具） | 127.0.0.1:8321 |
 | `/codex/mcp` | CodexMCP fork（codex 工具，含 provider 降级） | 127.0.0.1:8322 |
+| `/codex-remote/v1/uploads` | 同一 CodexMCP 容器：完整项目审查快照上传接口 | 127.0.0.1:8322 |
+| `/codex-remote/mcp` | 同一 CodexMCP 容器：审查 MCP（codex_project_review 等 3 工具） | 127.0.0.1:8322 |
 | `/amap/mcp` | Amap Maps（高德地图 16 工具：地理编码/路线/天气/POI） | 127.0.0.1:8323 |
 | `/zotero/mcp` | Zotero（文献库检索/元数据/全文 3 工具） | 127.0.0.1:8324 |
 | `/admin` | mcp-admin 管理界面 | 127.0.0.1:8330 |
@@ -51,7 +53,7 @@ mcp-center/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── groksearch/Dockerfile   # 钉 fork commit SHA 构建
-├── codexmcp/Dockerfile     # 钉 fork SHA + Codex CLI (Node)
+├── codexmcp/Dockerfile     # 钉 fork SHA + Codex CLI (Node)；含 /codex-remote/ 远程审查模块
 ├── amapmcp/                # 零 fork 模式：PyPI 直装 + wrapper
 │   ├── Dockerfile          #   amap-mcp-server==0.1.11（mcp 1.x）
 │   └── wrapper.py          #   读 config.json 注入 env → streamable-http
@@ -220,6 +222,27 @@ Token 格式 `mcp_v2_<id>_<secret>`，仅创建时展示一次。建议一机一
 命中额度/认证类失败（usage limit / 401 / 429 / not logged in 等）时单请求内自动降级重跑；跨 provider 不续会话。只想走第三方设 `CODEX_PROVIDER_ORDER=custom`。
 
 > 注意：不要把一台机器的 `~/.codex/auth.json` 复制到容器共用——refresh token 轮换会互踢登录。
+
+## 远程完整项目审查（/codex-remote/）
+
+其他服务器上的 agent 把**完整项目快照**上传中心、由中央 Codex 审查——中心不 SSH 客户端、客户端不装 Codex。上传接口与审查 MCP 挂在同一个 CodexMCP 容器，Token 与 `/codex` 同源。
+
+```bash
+# 客户端（Linux/Mac，python3 + git）：fork 仓库 client/codex_review_client.py
+python3 codex_review_client.py inspect --repo /path/to/project   # 预览将上传什么
+export CODEXMCP_TOKEN=<token>
+python3 codex_review_client.py upload --repo /path/to/project \
+  --endpoint https://<域名>/codex-remote/v1/uploads --token-env CODEXMCP_TOKEN
+# → {"upload_id": "upl_...", "expires_at": "..."}（30 分钟内有效）
+```
+
+随后 agent 调 MCP 工具（端点 `https://<域名>/codex-remote/mcp`）：
+
+- `codex_project_review(upload_id, PROMPT, mode)` — 审查完整快照（mode: review/debug/test-analysis）；复审传 `previous_review_id`
+- `codex_project_continue(review_id, PROMPT)` — 同快照续问
+- `codex_project_finalize(review_id)` — 立即删除中心侧源码
+
+安全要点：客户端不可指定 cd/sandbox/yolo/model/profile；上传包逐项校验（路径穿越/符号链接/解压炸弹/敏感文件/manifest 对账全拒绝）；upload_id 绑定 Token（跨 Token 拒绝）；临时 workspace TTL 自动清理（30min/60min/2h + finalize 即删）。客户端可选 `.codex-review.toml` 定义本地测试 profile（命令只在客户端执行，输出随快照上传，中心不执行任何项目代码）。
 
 ## 零 fork 接入模式（amap / zotero 同款）
 
