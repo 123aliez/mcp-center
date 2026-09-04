@@ -51,6 +51,7 @@ MCP_CATALOG = {
         "label": "GrokSearch",
         "desc": "Grok 深度搜索 + Tavily 抓取 + Firecrawl 托底",
         "path": "/grok",
+        "container": "mcp-groksearch",
         "restart_needed": False,  # config.json mtime 热重载
         "config_fields": [
             {"key": "GROK_API_URL", "label": "Grok API URL", "secret": False, "placeholder": "https://api.x.ai/v1 或中转地址"},
@@ -64,12 +65,37 @@ MCP_CATALOG = {
         "label": "CodexMCP",
         "desc": "Codex CLI 协作（第三方 API 表单化配置，保存即热生效）",
         "path": "/codex",
+        "container": "mcp-codexmcp",
         "restart_needed": False,
         "config_fields": [
             {"key": "CODEX_BASE_URL", "label": "第三方 API Base URL", "secret": False, "placeholder": "https://api.example.com/v1（OpenAI Responses 兼容）"},
             {"key": "CODEX_API_KEY", "label": "API Key", "secret": True, "placeholder": "sk-..."},
             {"key": "CODEX_MODEL", "label": "默认模型", "secret": False, "placeholder": "gpt-5.5", "type": "model_select"},
             {"key": "CODEX_MAX_CONCURRENCY", "label": "并发上限", "secret": False, "placeholder": "2"},
+        ],
+    },
+    "amap": {
+        "label": "Amap Maps",
+        "desc": "高德地图（地理编码/路线/天气/POI 16 工具，sugarforever Python 版）",
+        "path": "/amap",
+        "container": "mcp-amapmcp",
+        # amap 在模块 import 时固化 API Key（server.py 模块级读取）→ 改 Key 需重启容器
+        "restart_needed": True,
+        "config_fields": [
+            {"key": "AMAP_MAPS_API_KEY", "label": "高德 Web 服务 API Key", "secret": True, "placeholder": "在高德开放平台控制台创建（Web 服务类型）"},
+        ],
+    },
+    "zotero": {
+        "label": "Zotero",
+        "desc": "文献库检索/元数据/全文（kujenga/zotero-mcp，Web API 模式）",
+        "path": "/zotero",
+        "container": "mcp-zoteromcp",
+        # get_zotero_client 每次调用读 os.environ，但 env 由 wrapper 启动时注入后进程内固化 → 改配置需重启容器
+        "restart_needed": True,
+        "config_fields": [
+            {"key": "ZOTERO_API_KEY", "label": "Zotero API Key", "secret": True, "placeholder": "zotero.org/settings/keys 创建"},
+            {"key": "ZOTERO_LIBRARY_ID", "label": "Library ID（用户 ID）", "secret": False, "placeholder": "如 20242038"},
+            {"key": "ZOTERO_LIBRARY_TYPE", "label": "Library 类型", "secret": False, "placeholder": "user 或 group"},
         ],
     },
 }
@@ -500,7 +526,7 @@ async def get_mcp_config(mcp_name: str, request: Request):
         return JSONResponse({"error": "unknown mcp"}, status_code=404)
     meta = MCP_CATALOG[mcp_name]
     cfg = _read_mcp_config(mcp_name)
-    # secret 字段只回显是否已设置 + 掩码
+    # secret 字段只回显是否已设置 + 掩码；审查修复#8：短值（≤4 字符）完整回显=泄露，统一只给掩码形态
     view = {}
     for f in meta["config_fields"]:
         val = cfg.get(f["key"], "")
@@ -558,14 +584,17 @@ async def set_mcp_config(mcp_name: str, request: Request):
         return JSONResponse({"error": "unknown mcp"}, status_code=404)
     body = await request.json()
     meta = MCP_CATALOG[mcp_name]
-    cfg = _read_mcp_config(mcp_name)
+    # 审查修复#3：只保留 config_fields 声明过的键——config.json 是 wrapper 的 env 注入源，
+    # 不能混入历史遗留/手工添加的任意键（消费者侧 wrapper 已另做白名单双重收口）
+    cfg = {}
     for f in meta["config_fields"]:
         if f["key"] in body:
             new = (body[f["key"]] or "").strip()
             # secret 字段留空或掩码形态（●开头）= 不变
             if f["secret"] and (not new or new.startswith("●")):
-                continue
-            cfg[f["key"]] = new
+                new = (_read_mcp_config(mcp_name).get(f["key"]) or "")
+            if new:
+                cfg[f["key"]] = new
     _mcp_config_file(mcp_name).parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(_mcp_config_file(mcp_name), cfg)
 
@@ -779,11 +808,11 @@ async function loadConfigs(){
       <datalist id="models_${name}"></datalist>
       <button class="ghost" onclick="fetchModels('${name}')" id="fetchbtn_${name}">拉取模型</button></div></div>`;
       return `<div class="field"><label>${f.label}${f.secret?'（留空=不修改）':''}</label>
-      <input id="cfg_${name}_${f.key}" placeholder="${f.placeholder||''}" value="${esc(d.config[f.key]||'')}"></div>`;}).join('');
+      <input ${f.secret?'type="password" autocomplete="off"':''} id="cfg_${name}_${f.key}" placeholder="${f.placeholder||''}" value="${esc(d.config[f.key]||'')}"></div>`;}).join('');
     cards.push(`<div class="card"><h2>${d.mcp.label} <span class="badge">${d.mcp.path}</span></h2>
       <div class="sub" style="margin-bottom:8px">${d.mcp.desc}</div>
       ${name==='codex'?'<div class="row" id="codexStatus" style="margin-bottom:8px"></div>':''}${fields}
-      ${d.mcp.restart_needed?'<div class="hint">注意：此 MCP 的配置需重启容器后生效（docker compose restart '+name+'mcp）</div>':''}
+      ${d.mcp.restart_needed?`<div class="hint">注意：此 MCP 的配置需重启容器后生效（docker restart ${d.mcp.container||name+'mcp'}）</div>`:''}
       <div class="row" style="margin-top:12px"><button onclick="saveCfg('${name}')">保存</button><span id="cfgmsg_${name}" class="hint"></span></div></div>`);
   }
   $('configCards').innerHTML=cards.join('');

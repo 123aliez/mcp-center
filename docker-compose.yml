@@ -65,10 +65,51 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
+  amapmcp:
+    build: ./amapmcp
+    image: mcp-amapmcp:v1
+    container_name: mcp-amapmcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8323:8323"
+    environment:
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_PORT=8323
+      - AMAP_CONFIG_FILE=/app/data/config.json
+    # 上游 Key 不进 env：mcp-admin 写 data/amap/config.json，wrapper 启动时注入（改 Key 需重启容器）
+    # 审查修复#5：MCP 容器只读配置（写者唯一 = mcp-admin），防止进程被利用后篡改持久化配置
+    volumes:
+      - ./data/amap:/app/data:ro
+    networks:
+      - net-amap
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  zoteromcp:
+    build: ./zoteromcp
+    image: mcp-zoteromcp:v1
+    container_name: mcp-zoteromcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8324:8324"
+    environment:
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_PORT=8324
+      - ZOTERO_CONFIG_FILE=/app/data/config.json
+      - MCP_ALLOWED_HOSTS=mcp.example.com
+    # 审查修复#5：只读挂载（同 amap）
+    volumes:
+      - ./data/zotero:/app/data:ro
+    networks:
+      - net-zotero
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
 
 
-# 审查修复#2：三容器各自独立网络，互不可达（消除 /codex 横向访问 grok/admin 绕过 ACL 的路径）
+# 审查修复#2：各容器各自独立网络，互不可达（消除 /codex 横向访问 grok/admin 绕过 ACL 的路径）
 # 对外唯一通道 = 各自 127.0.0.1 端口映射 ← 宿主机 Nginx
 networks:
   net-admin:
@@ -79,4 +120,10 @@ networks:
     driver: bridge
   net-codex:
     name: mcp-net-codex
+    driver: bridge
+  net-amap:
+    name: mcp-net-amap
+    driver: bridge
+  net-zotero:
+    name: mcp-net-zotero
     driver: bridge

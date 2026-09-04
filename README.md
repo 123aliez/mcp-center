@@ -7,15 +7,18 @@
                           │
               ┌───────────▼────────────┐
               │  Nginx (TLS + 路径分流) │  auth_request → 统一鉴权
-              └───┬─────────┬──────┬───┘
-          /grok/   │  /codex/│      │  /admin
-                  ▼         ▼      ▼
-           ┌──────────┐ ┌────────┐ ┌──────────────────┐
-           │ GrokSearch│ │CodexMCP│ │ mcp-admin :8330  │
-           │   :8321   │ │ :8322  │ │ · Token 签发/吊销│
-           │ (fork)    │ │ (fork) │ │ · 上游 API 配置   │
-           └──────────┘ └────────┘ │ · 管理界面        │
-                                   └──────────────────┘
+              └──┬────────┬────────┬──┬──┘
+       /grok/    │ /codex/│ /amap/ │  │  /admin      /zotero/
+                 ▼        ▼        ▼  ▼                ▼
+          ┌──────────┐ ┌───────┐ ┌──────┐ ┌──────────────────┐
+          │ GrokSearch│ │CodexMCP│ │ Amap │ │ mcp-admin :8330  │
+          │  :8321   │ │ :8322  │ │:8323 │ │ · Token 签发/吊销│
+          │ (fork)   │ │ (fork) │ │(PyPI)│ │ · 上游 API 配置   │
+          └──────────┘ └───────┘ └──────┘ │ · 管理界面        │
+                          ┌──────────────┐ └──────────────────┘
+                          │ Zotero :8324 │
+                          │  (PyPI)     │
+                          └──────────────┘
             新增 MCP = 加一个容器 + 一个 location 块
 ```
 
@@ -33,20 +36,28 @@
 |------|------|------|
 | `/grok/mcp` | GrokSearch fork（web_search / web_fetch / plan_* 等 13 工具） | 127.0.0.1:8321 |
 | `/codex/mcp` | CodexMCP fork（codex 工具，含 provider 降级） | 127.0.0.1:8322 |
+| `/amap/mcp` | Amap Maps（高德地图 16 工具：地理编码/路线/天气/POI） | 127.0.0.1:8323 |
+| `/zotero/mcp` | Zotero（文献库检索/元数据/全文 3 工具） | 127.0.0.1:8324 |
 | `/admin` | mcp-admin 管理界面 | 127.0.0.1:8330 |
-| `/NNNN/mcp` | 未来 MCP（8323+ 递增预留） | 127.0.0.1:83XX |
+| `/NNNN/mcp` | 未来 MCP（8325+ 递增预留） | 127.0.0.1:83XX |
 
 ## 目录结构
 
 ```
 mcp-center/
-├── docker-compose.yml      # 三服务 + 独立网络
+├── docker-compose.yml      # 五服务 + 各自独立网络
 ├── mcp-admin/
 │   ├── app.py              # 自研管理/鉴权服务（FastAPI 单文件）
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── groksearch/Dockerfile   # 钉 fork commit SHA 构建
 ├── codexmcp/Dockerfile     # 钉 fork SHA + Codex CLI (Node)
+├── amapmcp/                # 零 fork 模式：PyPI 直装 + wrapper
+│   ├── Dockerfile          #   amap-mcp-server==0.1.11（mcp 1.x）
+│   └── wrapper.py          #   读 config.json 注入 env → streamable-http
+├── zoteromcp/              # 同上模式
+│   ├── Dockerfile          #   zotero-mcp==0.3.1（mcp 2.x）
+│   └── wrapper.py
 ├── .gitignore              # secrets/data/.env 不入库
 └── (运行时生成) data/ secrets/ logs/ workspace/
 ```
@@ -210,18 +221,40 @@ Token 格式 `mcp_v2_<id>_<secret>`，仅创建时展示一次。建议一机一
 
 > 注意：不要把一台机器的 `~/.codex/auth.json` 复制到容器共用——refresh token 轮换会互踢登录。
 
+## 零 fork 接入模式（amap / zotero 同款）
+
+上游本身就是官方/社区 Python 包、且带 streamable-http 能力时，**不需要 fork**：
+
+```
+Dockerfile:  uv pip install 钉版本的 PyPI 包（连同验证过的 mcp 大版本一起钉）
+wrapper.py:  读 /app/data/config.json（白名单键直赋 env）→ import 包 → 起 streamable-http
+compose:     端口 127.0.0.1 + 独立网络 + data/<mcp>:ro 只读挂载（写者唯一 = mcp-admin）
+Nginx:       复制一个 location 块（mcp 1.x 的 /mcp→/mcp/ 307 需 rewrite 显式规范端点）
+```
+
+两种 mcp SDK 代的启动差异：
+
+| | mcp 1.x（amap） | mcp 2.x（zotero） |
+|---|---|---|
+| 实例类 | `FastMCP` → `MCPServer` 迁移中 | `MCPServer` |
+| 监听设置 | 覆盖 `mcp.settings.host/port` | `run(host=, port=)` kwargs |
+| Host 防护 | 无（无 DNS rebinding 校验） | `transport_security=TransportSecuritySettings(allowed_hosts=...)` 需放行反代域名 |
+
+注意：这类包多在 **import/启动时固化凭据**，管理页改 Key 后需重启对应容器（卡片上有提示）。wrapper 对 config.json 做白名单键注入 + 损坏即拒绝启动（防假健康）。
+
 ## 升级与回滚
 
-镜像 tag 制度：每次构建打 `:vN`，旧 tag 不删。fork 升级 = 改 Dockerfile 里的 commit SHA → `build --no-cache` → `up -d`；回滚 = compose 里 image 改回旧 tag。
+镜像 tag 制度：每次构建打 `:vN`，旧 tag 不删。fork 升级 = 改 Dockerfile 里的 commit SHA；PyPI 包升级 = 改钉的版本号 → `build --no-cache` → `up -d`；回滚 = compose 里 image 改回旧 tag。
 
 ## 安全设计清单
 
 - Token 库只存 HMAC-SHA256 摘要（pepper 独立 0600 文件），恒定时间比较，抗时序探测
 - 授权资源名由 Nginx internal 子请求注入，客户端伪造 `X-MCP-Path` 无效
 - tokens.json 原子写（tmp + fsync + os.replace），单 Uvicorn worker 单写者
-- 管理面：bcrypt 密码 + setup key 首设防抢注 + session 存 SID 的 HMAC + CSRF（自定义头 + Origin 校验）+ 登录失败退避 + Nginx 分档限速
+- 管理面：bcrypt 密码 + setup key 首设防抢注 + session 存 SID 的 HMAC + CSRF（自定义头 + Origin 校验）+ 登录失败退避 + Nginx 分档限速；secret 输入框 `type=password`
 - 上游 Key 落 data/ 卷内 0600 文件，`.env` 不含密钥，`docker inspect` 无泄漏面
-- fail-closed：鉴权服务不可达 → 全部请求拒绝
+- MCP 容器对 data/ 只读挂载（配置写者唯一 = mcp-admin）；wrapper 白名单键注入 env，config.json 失陷也无法注入任意环境变量
+- fail-closed：鉴权服务不可达 → 全部请求拒绝；wrapper 配置损坏 → 拒绝启动（而非带病假健康）
 
 ## License
 
