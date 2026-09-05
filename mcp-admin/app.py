@@ -710,7 +710,7 @@ a{color:var(--acc);text-decoration:none}
 <h2>登录</h2>
 <div id="setupHint" class="hint" style="display:none">首次设置：需同时输入初始化密钥（ADMIN_SETUP_KEY，见服务器 .env）</div>
 <label>初始化密钥（仅首次）<input id="setupKey" placeholder="ADMIN_SETUP_KEY" autocomplete="off"></label>
-<label>管理密码<input id="pw" type="password" autocomplete="off"></label>
+<label>管理密码<div class="row" style="margin:0"><input id="pw" type="password" autocomplete="off" data-secret="1" style="flex:1"><button class="ghost" type="button" onclick="togglePw(this)" title="显示/隐藏">👁</button></div></label>
 <div class="row"><button onclick="login()">登录 / 首次设置</button></div>
 </div>
 
@@ -738,6 +738,8 @@ a{color:var(--acc);text-decoration:none}
 let CATALOG={};
 const $=id=>document.getElementById(id);
 function toast(msg,ok=true){const t=$('toast');t.textContent=msg;t.style.borderColor=ok?'var(--ok)':'var(--err)';t.style.display='block';setTimeout(()=>t.style.display='none',6000)}
+// 密钥输入框显示/隐藏切换（按钮必须 type=button 防触发表单默认行为）
+function togglePw(btn){const inp=btn.parentElement.querySelector('input');if(!inp)return;const show=inp.type==='password';inp.type=show?'text':'password';btn.textContent=show?'🙈':'👁';btn.title=show?'隐藏':'显示';}
 async function api(path,opts){const r=await fetch(path,{headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},...opts});if(r.status===401){showLogin();throw 401}return r}
 
 function showLogin(){$('loginCard').style.display='block';$('main').style.display='none'}
@@ -808,7 +810,7 @@ async function loadConfigs(){
       <datalist id="models_${name}"></datalist>
       <button class="ghost" onclick="fetchModels('${name}')" id="fetchbtn_${name}">拉取模型</button></div></div>`;
       return `<div class="field"><label>${f.label}${f.secret?'（留空=不修改）':''}</label>
-      <input ${f.secret?'type="password" autocomplete="off"':''} id="cfg_${name}_${f.key}" placeholder="${f.placeholder||''}" value="${esc(d.config[f.key]||'')}"></div>`;}).join('');
+      <div class="row" style="margin:0"><input ${f.secret?'type="password" autocomplete="off"':''} id="cfg_${name}_${f.key}" placeholder="${f.placeholder||''}" value="${esc(d.config[f.key]||'')}" style="flex:1"${f.secret?' data-secret="1"':''}>${f.secret?`<button class="ghost" type="button" onclick="togglePw(this)" title="显示/隐藏">👁</button>`:''}</div></div>`;}).join('');
     cards.push(`<div class="card"><h2>${d.mcp.label} <span class="badge">${d.mcp.path}</span></h2>
       <div class="sub" style="margin-bottom:8px">${d.mcp.desc}</div>
       ${name==='codex'?'<div class="row" id="codexStatus" style="margin-bottom:8px"></div>':''}${fields}
