@@ -44,7 +44,11 @@ services:
       options: {max-size: "10m", max-file: "3"}
 
   codexmcp:
-    build: ./codexmcp
+    build:
+      context: ./codexmcp
+      # 钉 fork commit SHA 构建（升级改此值并打新镜像 tag；回滚 = 改回旧 SHA 重建）
+      args:
+        CODEXMCP_REF: 83381e5
     image: mcp-codexmcp:v1
     container_name: mcp-codexmcp
     restart: unless-stopped
