@@ -228,7 +228,10 @@ Token 格式 `mcp_v2_<id>_<secret>`，仅创建时展示一次。建议一机一
 其他服务器上的 agent 把**完整项目快照**上传中心、由中央 Codex 审查——中心不 SSH 客户端、客户端不装 Codex。上传接口与审查 MCP 挂在同一个 CodexMCP 容器，Token 与 `/codex` 同源。
 
 ```bash
-# 客户端（Linux/Mac，python3 + git）：fork 仓库 client/codex_review_client.py
+# 客户端（Linux/Mac，python3 + git）——一条命令从网关拿客户端脚本（随镜像分发）
+curl -fsSL -o codex_review_client.py -H "Authorization: Bearer <token>" \
+  https://<域名>/codex-remote/client.py
+
 python3 codex_review_client.py inspect --repo /path/to/project   # 预览将上传什么
 export CODEXMCP_TOKEN=<token>
 python3 codex_review_client.py upload --repo /path/to/project \
