@@ -48,7 +48,7 @@ services:
       context: ./codexmcp
       # 钉 fork commit SHA 构建（升级改此值并打新镜像 tag；回滚 = 改回旧 SHA 重建）
       args:
-        CODEXMCP_REF: dd69442
+        CODEXMCP_REF: 2894daa
     image: mcp-codexmcp:v1
     container_name: mcp-codexmcp
     restart: unless-stopped
