@@ -25,6 +25,8 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # node 镜像内置 uid 1000（node 用户）：直接复用为运行用户，HOME 固定，
 # .codex 凭据/配置持久化由 compose 挂载卷实现
 # /var/lib/codexmcp：uploads(staging/ready) + reviews + state（临时快照，TTL 自动清理）
+# 客户端工具随镜像分发：GET /codex-remote/client.py 直接 curl 下载（纯标准库单文件）
+COPY --chown=node:node codex_review_client.py /app/codex_review_client.py
 RUN mkdir -p /app/data /workspace /home/node/.codex /var/lib/codexmcp \
     && chown -R node:node /app/data /workspace /home/node/.codex /var/lib/codexmcp
 ENV HOME=/home/node \
