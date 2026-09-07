@@ -239,10 +239,11 @@ python3 codex_review_client.py upload --repo /path/to/project \
 # → {"upload_id": "upl_...", "expires_at": "..."}（30 分钟内有效）
 ```
 
-随后 agent 调 MCP 工具（端点 `https://<域名>/codex-remote/mcp`）：
+随后 agent 调 MCP 工具（端点 `https://<域名>/codex-remote/mcp`）——**审查是异步的**，发起立即返回，轮询领取结果：
 
-- `codex_project_review(upload_id, PROMPT, mode)` — 审查完整快照（mode: review/debug/test-analysis）；复审传 `previous_review_id`
-- `codex_project_continue(review_id, PROMPT)` — 同快照续问
+- `codex_project_review(upload_id, PROMPT, mode)` — 发起审查，**秒级返回 review_id**（mode: review/debug/test-analysis；复审传 `previous_review_id`）
+- `codex_review_status(review_id)` — 每 20-30 秒轮询：REVIEWING=进行中（全项目审查 1-5 分钟属正常）/ COMPLETED=响应内含完整报告 / FAILED=看 error
+- `codex_project_continue(review_id, PROMPT)` — 同快照续问（REVIEWING 中会被拒；代码改了就重新上传）
 - `codex_project_finalize(review_id)` — 立即删除中心侧源码
 
 安全要点：客户端不可指定 cd/sandbox/yolo/model/profile；上传包逐项校验（路径穿越/符号链接/解压炸弹/敏感文件/manifest 对账全拒绝）；upload_id 绑定 Token（跨 Token 拒绝）；临时 workspace TTL 自动清理（30min/60min/2h + finalize 即删）。客户端可选 `.codex-review.toml` 定义本地测试 profile（命令只在客户端执行，输出随快照上传，中心不执行任何项目代码）。
