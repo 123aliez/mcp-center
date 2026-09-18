@@ -164,6 +164,7 @@ class TokenStore:
         self._tokens: dict[str, dict] = {}
         self._mtime_ns = (0, 0, 0)
         self._dirty_counts: dict[str, int] = {}
+        self._dirty_meta = False
         self._last_flush = 0.0
         self._reload_if_needed()
 
@@ -250,12 +251,17 @@ class TokenStore:
 
     def maybe_flush(self, force: bool = False) -> None:
         now = time.monotonic()
-        if not force and (not self._dirty_counts or now - self._last_flush < FLUSH_INTERVAL):
+        if not force and (not self._dirty_counts and not self._dirty_meta or now - self._last_flush < FLUSH_INTERVAL):
             return
-        if self._dirty_counts:
+        if self._dirty_counts or self._dirty_meta:
             self._persist()
             self._dirty_counts.clear()
+            self._dirty_meta = False
         self._last_flush = now
+
+    def mark_meta_dirty(self) -> None:
+        """元数据（名称/权限）被管理端直接修改后调用，下一轮 flush 落盘。"""
+        self._dirty_meta = True
 
 
 STORE = TokenStore()
@@ -499,6 +505,38 @@ async def toggle_token(token_id: str, request: Request):
     body = await request.json()
     ok = STORE.revoke(token_id, bool(body.get("revoked", True)))
     return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+
+@app.patch("/admin/api/tokens/{token_id}")
+async def update_token(token_id: str, request: Request):
+    """编辑 Token 元数据：名称与路径权限（不改 secret——改密钥面 = 删旧发新）。"""
+    if not _session_valid(request) or not _csrf_ok(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    STORE._reload_if_needed()
+    rec = STORE._tokens.get(token_id)
+    if rec is None:
+        return JSONResponse({"error": "token 不存在"}, status_code=404)
+    body = await request.json()
+    # 名称
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name or len(name) > 100:
+            return JSONResponse({"error": "名称不能为空且 ≤100 字符"}, status_code=400)
+        rec["name"] = name
+    # 路径权限：全量替换（白名单校验，至少一条）
+    if "paths" in body:
+        valid_paths = {v["path"] for v in MCP_CATALOG.values()}
+        new_paths = [p for p in (body.get("paths") or []) if p in valid_paths]
+        # 去重保序
+        seen = set()
+        new_paths = [p for p in new_paths if not (p in seen or seen.add(p))]
+        if not new_paths:
+            return JSONResponse({"error": "至少选择一个有效路径"}, status_code=400)
+        rec.setdefault("permissions", {})["paths"] = new_paths
+    rec["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    STORE.mark_meta_dirty()
+    STORE.maybe_flush(force=True)  # 立即落盘（原子写）
+    return {"token": {k: v for k, v in rec.items() if k != "secret_hmac"}}
 
 
 @app.delete("/admin/api/tokens/{token_id}")
@@ -768,8 +806,34 @@ async function loadTokens(){
     <td>${(t.permissions.paths||[]).join(', ')}</td>
     <td>${t.request_count}</td><td>${t.last_used_at?String(t.last_used_at).slice(0,19).replace('T',' '):'—'}</td>
     <td><span class="badge ${t.enabled?'on':'off'}">${t.enabled?'启用':'停用'}</span></td>
-    <td><button class="ghost" onclick="toggleTok('${t.id}',${t.enabled})">${t.enabled?'停用':'启用'}</button>
+    <td><button class="ghost" onclick="editTok('${t.id}')">编辑</button>
+        <button class="ghost" onclick="toggleTok('${t.id}',${t.enabled})">${t.enabled?'停用':'启用'}</button>
         <button class="danger" onclick="delTok('${t.id}')">删除</button></td></tr>`).join('');
+  TOKENS=d.tokens;
+}
+let TOKENS=[];
+function editTok(id){
+  const t=TOKENS.find(x=>x.id===id);if(!t)return;
+  const checks=Object.values(CATALOG).map(c=>{
+    const on=(t.permissions.paths||[]).includes(c.path);
+    return `<label style="margin:0"><input type="checkbox" id="editPath_${c.path.replace(/\\//g,'_')}" value="${c.path}" ${on?'checked':''}> ${c.path}（${esc(c.label)}）</label>`;
+  }).join('');
+  if(!$('editCard')){
+    const div=document.createElement('div');div.className='card';div.id='editCard';
+    div.innerHTML='<h2>编辑 Token</h2><label>名称<input id="editName" style="width:100%"></label><label>路径权限</label><div class="row" id="editPaths"></div><div class="row" style="margin-top:12px"><button onclick="saveEditTok()">保存</button><button class="ghost" onclick="$(\'editCard\').style.display=\'none\'">取消</button><span id="editMsg" class="hint"></span></div>';
+    $('main').insertBefore(div,$('configCards'));
+  }
+  $('editName').value=t.name;$('editPaths').innerHTML=checks;
+  $('editCard').style.display='block';$('editCard').dataset.tid=id;
+  $('editCard').scrollIntoView({behavior:'smooth',block:'center'});
+}
+async function saveEditTok(){
+  const id=$('editCard').dataset.tid;
+  const paths=[...document.querySelectorAll('#editPaths input:checked')].map(i=>i.value);
+  const r=await api(`/admin/api/tokens/${id}`,{method:'PATCH',body:JSON.stringify({name:$('editName').value,paths})});
+  const d=await r.json();
+  if(!r.ok){toast(d.error,false);return}
+  toast('已保存（即时生效）');$('editCard').style.display='none';loadTokens();
 }
 function renderPathChecks(){
   $('pathChecks').innerHTML=Object.values(CATALOG).map(c=>`<label style="margin:0"><input type="checkbox" value="${c.path}"> ${c.path}（${c.label}）</label>`).join('');
