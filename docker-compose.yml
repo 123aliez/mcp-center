@@ -43,50 +43,6 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
-  codexmcp:
-    build:
-      context: ./codexmcp
-      # 钉 fork commit SHA 构建（升级改此值并打新镜像 tag；回滚 = 改回旧 SHA 重建）
-      args:
-        CODEXMCP_REF: 88f9cf2
-    image: mcp-codexmcp:v1
-    container_name: mcp-codexmcp
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8322:8322"
-    environment:
-      - MCP_HTTP_HOST=0.0.0.0
-      - MCP_HTTP_PORT=8322
-      - CODEX_CD_ALLOWLIST=/workspace:/var/lib/codexmcp/reviews
-      - CODEX_MAX_CONCURRENCY=2
-      - MCP_ALLOWED_HOSTS=mcp.hybaliez.xyz
-      # 远程审查（方案 §20 中央配置）
-      - CODEXMCP_UPLOAD_ROOT=/var/lib/codexmcp/uploads
-      - CODEXMCP_REVIEW_ROOT=/var/lib/codexmcp/reviews
-      - CODEXMCP_STATE_DB=/var/lib/codexmcp/state/codexmcp.sqlite3
-      - CODEXMCP_MAX_UPLOAD_BYTES=314572800
-      - CODEXMCP_MAX_UNPACKED_BYTES=2147483648
-      - CODEXMCP_MAX_FILE_COUNT=100000
-      - CODEXMCP_MAX_SINGLE_FILE_BYTES=20971520
-      - CODEXMCP_MAX_COMPRESSION_RATIO=100
-      - CODEXMCP_UPLOAD_TTL_SECONDS=1800
-      - CODEXMCP_REVIEW_IDLE_TTL_SECONDS=3600
-      - CODEXMCP_REVIEW_HARD_TTL_SECONDS=7200
-      - CODEXMCP_CLEANUP_INTERVAL_SECONDS=300
-      - CODEXMCP_GLOBAL_CONCURRENCY=2
-      - CODEXMCP_PER_CLIENT_CONCURRENCY=1
-      - CODEXMCP_CODEX_TIMEOUT_SECONDS=1800
-    volumes:
-      - ./workspace:/workspace
-      # Codex 凭据/配置持久化（deploy 后 docker exec codex login；recreate 不丢）
-      - ./data/codex/home:/home/node
-      # 远程审查：上传暂存/审查 workspace/状态库（TTL 自动清理，备份时排除 reviews/ 内容）
-      - ./data/codex/store:/var/lib/codexmcp
-    networks:
-      - net-codex
-    logging:
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
   amapmcp:
     build: ./amapmcp
     image: mcp-amapmcp:v1
@@ -139,9 +95,6 @@ networks:
     driver: bridge
   net-grok:
     name: mcp-net-grok
-    driver: bridge
-  net-codex:
-    name: mcp-net-codex
     driver: bridge
   net-amap:
     name: mcp-net-amap

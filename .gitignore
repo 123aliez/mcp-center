@@ -3,6 +3,7 @@ secrets/
 data/
 logs/
 workspace/
+/backups/
 .env
 *.env
 *.pem

@@ -61,19 +61,6 @@ MCP_CATALOG = {
             {"key": "FIRECRAWL_API_KEY", "label": "Firecrawl API Key", "secret": True, "placeholder": "fc-..."},
         ],
     },
-    "codex": {
-        "label": "CodexMCP",
-        "desc": "Codex CLI 协作（第三方 API 表单化配置，保存即热生效）",
-        "path": "/codex",
-        "container": "mcp-codexmcp",
-        "restart_needed": False,
-        "config_fields": [
-            {"key": "CODEX_BASE_URL", "label": "第三方 API Base URL", "secret": False, "placeholder": "https://api.example.com/v1（OpenAI Responses 兼容）"},
-            {"key": "CODEX_API_KEY", "label": "API Key", "secret": True, "placeholder": "sk-..."},
-            {"key": "CODEX_MODEL", "label": "默认模型", "secret": False, "placeholder": "gpt-5.5", "type": "model_select"},
-            {"key": "CODEX_MAX_CONCURRENCY", "label": "并发上限", "secret": False, "placeholder": "2"},
-        ],
-    },
     "amap": {
         "label": "Amap Maps",
         "desc": "高德地图（地理编码/路线/天气/POI 16 工具，sugarforever Python 版）",
@@ -580,7 +567,7 @@ async def fetch_upstream_models(mcp_name: str, request: Request):
     """从上游拉取模型列表（GrokSearch：GET <url>/models，Bearer Key）。服务端代拉避免 CORS。"""
     if not _session_valid(request) or not _csrf_ok(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    field_map = {"grok": ("GROK_API_URL", "GROK_API_KEY"), "codex": ("CODEX_BASE_URL", "CODEX_API_KEY")}
+    field_map = {"grok": ("GROK_API_URL", "GROK_API_KEY")}
     if mcp_name not in field_map:
         return JSONResponse({"error": "该 MCP 不支持模型拉取"}, status_code=404)
     url_key, key_field = field_map[mcp_name]
@@ -688,6 +675,8 @@ args = ["/home/node/.codex/provider_api_key"]
 @app.get("/admin/api/codex/status")
 async def codex_login_status(request: Request):
     """Codex 凭据状态：auth.json（ChatGPT 登录）或 config.toml+key（第三方 API）"""
+    if "codex" not in MCP_CATALOG:
+        return Response(status_code=404)
     if not _session_valid(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     codex_home = DATA_DIR / "codex" / "home" / ".codex"

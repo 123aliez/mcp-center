@@ -2,42 +2,32 @@
 
 多 MCP 统一网关：**一个域名 + 一套 Token 鉴权 + 一个管理界面**，托管任意多个 MCP 服务。客户端零安装，一条 URL + Bearer Token 接入。
 
-```
-                https://mcp.example.com
-                          │
-              ┌───────────▼────────────┐
-              │  Nginx (TLS + 路径分流) │  auth_request → 统一鉴权
-              └──┬────────┬────────┬──┬──┘
-       /grok/    │ /codex/│ /amap/ │  │  /admin      /zotero/
-                 ▼        ▼        ▼  ▼                ▼
-          ┌──────────┐ ┌───────┐ ┌──────┐ ┌──────────────────┐
-          │ GrokSearch│ │CodexMCP│ │ Amap │ │ mcp-admin :8330  │
-          │  :8321   │ │ :8322  │ │:8323 │ │ · Token 签发/吊销│
-          │ (fork)   │ │ (fork) │ │(PyPI)│ │ · 上游 API 配置   │
-          └──────────┘ └───────┘ └──────┘ │ · 管理界面        │
-                          ┌──────────────┐ └──────────────────┘
-                          │ Zotero :8324 │
-                          │  (PyPI)     │
-                          └──────────────┘
-            新增 MCP = 加一个容器 + 一个 location 块
+当前部署为 **4 个容器**：mcp-admin、GrokSearch、Amap、Zotero。CodexMCP 已下线，源码仅保留作历史参考。
+
+```text
+https://mcp.example.com
+         │
+Nginx（TLS + 路径分流）── auth_request → mcp-admin :8330
+         ├── /grok/   → GrokSearch :8321
+         ├── /amap/   → Amap Maps  :8323
+         ├── /zotero/ → Zotero     :8324
+         └── /admin  → mcp-admin  :8330
+
+每个容器使用独立网络；后端端口仅监听 127.0.0.1。
 ```
 
 ## 特性
 
 - **统一鉴权**：Nginx `auth_request` 子请求 → mcp-admin `/verify`（HMAC-SHA256 Token 摘要存储，明文仅创建时展示一次）；**按路径授权**（一个 Token 只能调指定 MCP）；吊销即时生效；mcp-admin 不可达时 fail-closed
-- **统一管理界面**：`/admin` 密码登录（bcrypt + 首设防抢注 + CSRF 防护 + 登录限速），各 MCP 一张配置卡片，上游 API Key 保存即**热生效**（零重启）
-- **模型下拉框**：填 API URL/Key 后一键从上游拉取模型列表，下拉选择
+- **统一管理界面**：`/admin` 密码登录（bcrypt + 首设防抢注 + CSRF 防护 + 登录限速），各 MCP 一张配置卡片；GrokSearch 保存配置后热生效，Amap/Zotero 保存后需重启对应容器
+- **模型下拉框**：GrokSearch 填 API URL/Key 后可从上游拉取模型列表，下拉选择
 - **网络隔离**：每容器独立 Docker 网络，互不可达；端口仅绑 `127.0.0.1`，对外唯一入口 Nginx
-- **provider 降级**（CodexMCP）：ChatGPT 登录额度优先，额度耗尽/认证失败自动切第三方 API 重跑（单请求内透明降级，`provider_used` 字段可观察）
 
 ## 路径规划
 
 | 路径 | 指向 | 端口 |
 |------|------|------|
 | `/grok/mcp` | GrokSearch fork（web_search / web_fetch / plan_* 等 13 工具） | 127.0.0.1:8321 |
-| `/codex/mcp` | CodexMCP fork（codex 工具，含 provider 降级） | 127.0.0.1:8322 |
-| `/codex-remote/v1/uploads` | 同一 CodexMCP 容器：完整项目审查快照上传接口 | 127.0.0.1:8322 |
-| `/codex-remote/mcp` | 同一 CodexMCP 容器：审查 MCP（codex_project_review 等 3 工具） | 127.0.0.1:8322 |
 | `/amap/mcp` | Amap Maps（高德地图 16 工具：地理编码/路线/天气/POI） | 127.0.0.1:8323 |
 | `/zotero/mcp` | Zotero（文献库检索/元数据/全文 3 工具） | 127.0.0.1:8324 |
 | `/admin` | mcp-admin 管理界面 | 127.0.0.1:8330 |
@@ -47,21 +37,21 @@
 
 ```
 mcp-center/
-├── docker-compose.yml      # 五服务 + 各自独立网络
+├── docker-compose.yml      # 四服务 + 各自独立网络
 ├── mcp-admin/
 │   ├── app.py              # 自研管理/鉴权服务（FastAPI 单文件）
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── groksearch/Dockerfile   # 钉 fork commit SHA 构建
-├── codexmcp/Dockerfile     # 钉 fork SHA + Codex CLI (Node)；含 /codex-remote/ 远程审查模块
+├── codexmcp/Dockerfile     # 历史源码，当前 compose 不部署 CodexMCP
 ├── amapmcp/                # 零 fork 模式：PyPI 直装 + wrapper
 │   ├── Dockerfile          #   amap-mcp-server==0.1.11（mcp 1.x）
 │   └── wrapper.py          #   读 config.json 注入 env → streamable-http
 ├── zoteromcp/              # 同上模式
 │   ├── Dockerfile          #   zotero-mcp==0.3.1（mcp 2.x）
 │   └── wrapper.py
-├── .gitignore              # secrets/data/.env 不入库
-└── (运行时生成) data/ secrets/ logs/ workspace/
+├── .gitignore              # secrets/data/backups/.env 不入库
+└── (运行时生成) data/ secrets/ logs/ backups/
 ```
 
 ## 部署
@@ -69,19 +59,19 @@ mcp-center/
 依赖：Docker + Compose、Nginx（需 `--with-http_auth_request_module`）、acme.sh（或任意 ACME 客户端）。
 
 > **脱敏说明**：仓库中的域名统一为 `mcp.example.com` / `api.example.com` 占位。部署时请替换：
-> - `docker-compose.yml` 的 `MCP_ALLOWED_HOSTS`（CodexMCP 的 Host 校验白名单，填你的真实网关域名）
 > - `mcp-admin/app.py` 中 `VERIFY_REALM` 与管理页标题里的域名（仅展示用途）
 > - Nginx vhost 的 `server_name` 与证书路径
 
 ```bash
-# 1. 目录与密钥
-mkdir -p data/{grok,codex/home,admin} logs/grok workspace secrets
+# 1. 目录与密钥（新部署；备份、.env 与密钥不提交仓库）
+umask 077
+mkdir -p data/{grok,amap,zotero,admin} logs/grok secrets
 openssl rand -hex 32 > secrets/token_hmac_pepper   # Token HMAC pepper（0600）
 openssl rand -hex 16 > /tmp/setup_key              # 管理密码首设密钥
 chmod -R 600 secrets/*; chmod 700 secrets
-chown -R 1000:1000 data logs workspace
+chown -R 1000:1000 data logs
 
-# 2. .env（仅非敏感项；上游 API Key 一律走管理界面，不进 env）
+# 2. .env 包含首设密钥，保持 600 权限；上游 API Key 走管理界面
 cat > .env <<EOF
 ADMIN_SETUP_KEY=$(cat /tmp/setup_key)
 EOF
@@ -96,6 +86,8 @@ docker compose up -d
 ```
 
 ### Nginx 配置要点
+
+以下为现有 HTTPS server 内的鉴权与 Grok 路由示例；另需按路径表配置 Amap/Zotero 和管理页。Nginx 配置由部署环境管理，不随 compose 自动更新。
 
 ```nginx
 # 每个 MCP 一个 location（新增 MCP = 复制一块）
@@ -127,6 +119,17 @@ location = /_mcp_verify {
 }
 ```
 
+从旧版升级时，删除指向 8322 的两段代理，改用下面 4 条 location，明确关闭 `/codex`、`/codex-remote` 及其全部子路径，防止旧请求落入其他处理逻辑。新部署也建议保留这些 404 规则；它们不启动历史 CodexMCP 服务。
+
+```nginx
+location = /codex { return 404; }
+location ^~ /codex/ { return 404; }
+location = /codex-remote { return 404; }
+location ^~ /codex-remote/ { return 404; }
+```
+
+修改实际 Nginx 配置后，先检查配置，再按部署环境的方式重载；仅更新 compose 不会关闭既有反代入口。
+
 ## 客户端接入
 
 接入前先在管理界面（`/admin` → 新建 Token）生成 Token，勾选该客户端需要的路径权限。以下按客户端逐条给出配置。
@@ -138,11 +141,7 @@ location = /_mcp_verify {
 claude mcp add --transport http mcp-grok "https://<域名>/grok/mcp" \
   --header "Authorization: Bearer <token>" --scope user
 
-# Codex 协作（mcp-codex）
-claude mcp add --transport http mcp-codex "https://<域名>/codex/mcp" \
-  --header "Authorization: Bearer <token>" --scope user
-
-# 验证：两条都应显示 ✔ Connected
+# 验证：mcp-grok 应显示 Connected；其他 MCP 按路径表逐条添加
 claude mcp list
 ```
 
@@ -151,7 +150,6 @@ claude mcp list
 ```bash
 echo 'export MCP_TOKEN=<token>' >> ~/.bashrc && source ~/.bashrc
 codex mcp add mcp-grok --url "https://<域名>/grok/mcp" --bearer-token-env-var MCP_TOKEN
-codex mcp add mcp-codex --url "https://<域名>/codex/mcp" --bearer-token-env-var MCP_TOKEN
 codex mcp list   # 验证
 ```
 
@@ -166,11 +164,16 @@ mcp_servers:
     headers:
       Authorization: "Bearer <token>"
     timeout: 180
-  mcp-codex:
-    url: "https://<域名>/codex/mcp"
+  mcp-amap:
+    url: "https://<域名>/amap/mcp"
     headers:
       Authorization: "Bearer <token>"
-    timeout: 300
+    timeout: 180
+  mcp-zotero:
+    url: "https://<域名>/zotero/mcp"
+    headers:
+      Authorization: "Bearer <token>"
+    timeout: 180
 ```
 
 改完重启生效：`systemctl --user restart hermes-gateway`（Docker 部署则重启对应容器）。
@@ -212,41 +215,19 @@ Token 格式 `mcp_v2_<id>_<secret>`，仅创建时展示一次。建议一机一
 3. `mcp-admin/app.py` 的 `MCP_CATALOG` 加一条（管理页即出现配置卡片）
 4. Token 勾选新路径即授权
 
-## CodexMCP 的 provider 降级
+## 历史参考：CodexMCP（已下线，当前不部署）
 
-环境变量 `CODEX_PROVIDER_ORDER`（默认 `chatgpt,custom`）决定尝试顺序：
+2026-10-19 起，当前 compose、管理 catalog 和有效网关路由均不再包含 CodexMCP。`codexmcp/` 保留历史构建源码，旧数据、镜像与凭据由部署环境按需保留；仓库不会提供运行数据。以下仅记录原设计，不能作为当前接入步骤。恢复此服务需要重新集成 compose、管理 catalog 和 Nginx，并单独验证。
 
-- **chatgpt** = 容器内 `codex login` 的登录额度（`docker exec -it <容器> codex login`）
-- **custom** = 管理页配置的第三方 API（OpenAI Responses 兼容端点）
+### 原 provider 降级设计
 
-命中额度/认证类失败（usage limit / 401 / 429 / not logged in 等）时单请求内自动降级重跑；跨 provider 不续会话。只想走第三方设 `CODEX_PROVIDER_ORDER=custom`。
+历史版本使用 `CODEX_PROVIDER_ORDER` 控制 ChatGPT 登录与第三方 API 的尝试顺序；在额度或认证失败时尝试其他 provider，跨 provider 不续会话。这些能力不属于当前四容器部署。
 
-> 注意：不要把一台机器的 `~/.codex/auth.json` 复制到容器共用——refresh token 轮换会互踢登录。
+### 原远程完整项目审查设计
 
-## 远程完整项目审查（/codex-remote/）
+原 `/codex-remote/` 与 `/codex/` 共用 CodexMCP 容器及路径权限：客户端上传完整项目快照，再通过异步审查工具发起、轮询、继续或结束审查。当前这些入口均应返回 404，旧客户端下载和上传命令不再可用。
 
-其他服务器上的 agent 把**完整项目快照**上传中心、由中央 Codex 审查——中心不 SSH 客户端、客户端不装 Codex。上传接口与审查 MCP 挂在同一个 CodexMCP 容器，Token 与 `/codex` 同源。
-
-```bash
-# 客户端（Linux/Mac，python3 + git）——一条命令从网关拿客户端脚本（随镜像分发）
-curl -fsSL -o codex_review_client.py -H "Authorization: Bearer <token>" \
-  https://<域名>/codex-remote/client.py
-
-python3 codex_review_client.py inspect --repo /path/to/project   # 预览将上传什么
-export CODEXMCP_TOKEN=<token>
-python3 codex_review_client.py upload --repo /path/to/project \
-  --endpoint https://<域名>/codex-remote/v1/uploads --token-env CODEXMCP_TOKEN
-# → {"upload_id": "upl_...", "expires_at": "..."}（30 分钟内有效）
-```
-
-随后 agent 调 MCP 工具（端点 `https://<域名>/codex-remote/mcp`）——**审查是异步的**，发起立即返回，轮询领取结果：
-
-- `codex_project_review(upload_id, PROMPT, mode)` — 发起审查，**秒级返回 review_id**（mode: review/debug/test-analysis；复审传 `previous_review_id`）
-- `codex_review_status(review_id)` — 每 20-30 秒轮询：REVIEWING=进行中（全项目审查 1-5 分钟属正常）/ COMPLETED=响应内含完整报告 / FAILED=看 error
-- `codex_project_continue(review_id, PROMPT)` — 同快照续问（REVIEWING 中会被拒；代码改了就重新上传）
-- `codex_project_finalize(review_id)` — 立即删除中心侧源码
-
-安全要点：客户端不可指定 cd/sandbox/yolo/model/profile；上传包逐项校验（路径穿越/符号链接/解压炸弹/敏感文件/manifest 对账全拒绝）；upload_id 绑定 Token（跨 Token 拒绝）；临时 workspace TTL 自动清理（30min/60min/2h + finalize 即删）。客户端可选 `.codex-review.toml` 定义本地测试 profile（命令只在客户端执行，输出随快照上传，中心不执行任何项目代码）。
+历史实现包含上传归属校验、路径/符号链接/解压大小检查、workspace TTL，以及 `codex_project_review`、`codex_review_status`、`codex_project_continue`、`codex_project_finalize` 生命周期工具；保留此说明用于阅读源码和评估将来的恢复工作。
 
 ## 零 fork 接入模式（amap / zotero 同款）
 
@@ -279,7 +260,7 @@ Nginx:       复制一个 location 块（mcp 1.x 的 /mcp→/mcp/ 307 需 rewrit
 - 授权资源名由 Nginx internal 子请求注入，客户端伪造 `X-MCP-Path` 无效
 - tokens.json 原子写（tmp + fsync + os.replace），单 Uvicorn worker 单写者
 - 管理面：bcrypt 密码 + setup key 首设防抢注 + session 存 SID 的 HMAC + CSRF（自定义头 + Origin 校验）+ 登录失败退避 + Nginx 分档限速；secret 输入框 `type=password`
-- 上游 Key 落 data/ 卷内 0600 文件，`.env` 不含密钥，`docker inspect` 无泄漏面
+- 上游 Key 落 data/ 卷内 0600 文件，`.env` 不保存上游 Key；其中的首设密钥同样需要保密
 - MCP 容器对 data/ 只读挂载（配置写者唯一 = mcp-admin）；wrapper 白名单键注入 env，config.json 失陷也无法注入任意环境变量
 - fail-closed：鉴权服务不可达 → 全部请求拒绝；wrapper 配置损坏 → 拒绝启动（而非带病假健康）
 
